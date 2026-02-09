@@ -14,6 +14,8 @@ import { resetup } from './setup'
 import { verilogModeGet } from './Verilog2CV'
 import { renderOrder, updateOrder } from './metadata'
 import ContentionPendingData from './contention';
+import { stateHistory } from '../debug/StateHistory'
+import { breakpointManager } from '../debug/BreakpointManager'
 
 /**
  * Core of the simulation and rendering algorithm.
@@ -191,6 +193,117 @@ export var canvasMessageData = {
     x: undefined,
     y: undefined,
     string: undefined,
+}
+
+/**
+ * Flag for debug mode
+ * @type {boolean}
+ * @category engine
+ */
+var debugMode = false
+
+/**
+ * used to set the value of debugMode.
+ * @param {boolean} param
+ * @category engine
+ */
+export function debugModeSet(param) {
+    debugMode = param
+    if (param) {
+        stateHistory.clear()
+        // Capture initial state
+        stateHistory.captureState(globalScope)
+    }
+}
+
+/**
+ * used to get the value of debugMode.
+ * @return {boolean}
+ * @category engine
+ */
+export function debugModeGet() {
+    return debugMode
+}
+
+/**
+ * Flag to track if simulation is paused by breakpoint
+ * @type {boolean}
+ * @category engine
+ */
+var pausedByBreakpoint = false
+
+/**
+ * used to get if paused by breakpoint
+ * @return {boolean}
+ * @category engine
+ */
+export function pausedByBreakpointGet() {
+    return pausedByBreakpoint
+}
+
+/**
+ * used to set pausedByBreakpoint
+ * @param {boolean} param
+ * @category engine
+ */
+export function pausedByBreakpointSet(param) {
+    pausedByBreakpoint = param
+}
+
+/**
+ * Resume simulation after breakpoint
+ * @category engine
+ */
+export function resumeSimulation() {
+    pausedByBreakpoint = false
+    breakpointManager.clearTriggered()
+    updateSimulationSet(true)
+    scheduleUpdate()
+}
+
+/**
+ * Add a breakpoint
+ * @param {Object} config - breakpoint configuration
+ * @category engine
+ */
+export function addBreakpoint(config) {
+    return breakpointManager.addBreakpoint(config)
+}
+
+/**
+ * Remove a breakpoint
+ * @param {number} id - breakpoint ID
+ * @category engine
+ */
+export function removeBreakpoint(id) {
+    breakpointManager.removeBreakpoint(id)
+}
+
+/**
+ * Toggle breakpoint enabled/disabled
+ * @param {number} id - breakpoint ID
+ * @category engine
+ */
+export function toggleBreakpoint(id) {
+    breakpointManager.toggleBreakpoint(id)
+}
+
+/**
+ * Get all breakpoints
+ * @return {Array} array of breakpoints
+ * @category engine
+ */
+export function getAllBreakpoints() {
+    return breakpointManager.getAllBreakpoints()
+}
+
+/**
+ * Get triggered breakpoint
+ * @return {Object} triggered breakpoint or null
+ * @category engine
+ */
+export function getTriggeredBreakpoint() {
+    return breakpointManager.getTriggeredBreakpoint()
 }
 
 /**
@@ -403,6 +516,12 @@ export function updateSelectionsAndPane(scope = globalScope) {
 export function play(scope = globalScope, resetNodes = false) {
     if (errorDetected) return // Don't simulate until error is fixed
     if (loading === true) return // Don't simulate until loaded
+    
+    // Don't run if paused by breakpoint
+    if (pausedByBreakpoint) return
+
+    // Get previous state for breakpoint change detection
+    const previousState = debugMode ? stateHistory.getCurrentState() : null
 
     simulationArea.simulationQueue.reset()
     plotArea.setExecutionTime() // Waveform thing
@@ -449,10 +568,87 @@ export function play(scope = globalScope, resetNodes = false) {
         forceResetNodesSet(true);
         showError('Contention Error: One or more bus contentions in the circuit (check highlighted nodes)');
     }
+    
+    // Capture state if in debug mode (after simulation is complete)
+    if (debugMode && !errorDetected) {
+        stateHistory.captureState(scope)
+        
+        // Check breakpoints after state is captured
+        const triggered = breakpointManager.checkBreakpoints(scope, previousState)
+        if (triggered) {
+            pausedByBreakpoint = true
+            updateSimulationSet(false) // Stop auto-simulation
+            console.log('🔴 Breakpoint hit:', triggered.description)
+            // The UI will detect this and show a notification
+        }
+    }
 }
 
 export function resetNodeHighlights(scope) {
     for (const node of scope.allNodes) node.highlighted = false;
+}
+
+/**
+ * Step back to previous simulation state
+ * @category engine
+ */
+export function stepBack() {
+    if (!debugMode) return
+    
+    const prevState = stateHistory.stepBack()
+    if (prevState) {
+        stateHistory.restoreState(globalScope, prevState)
+        updateCanvasSet(true)
+        scheduleUpdate(1, 0) // Force immediate update
+    }
+}
+
+/**
+ * Step forward to next simulation state (if available)
+ * @category engine
+ */
+export function stepForward() {
+    if (!debugMode) return
+    
+    if (stateHistory.canStepForward()) {
+        const nextState = stateHistory.stepForward()
+        stateHistory.restoreState(globalScope, nextState)
+        updateCanvasSet(true)
+        scheduleUpdate(1, 0)
+    } else {
+        // If no future state exists, run one simulation step
+        play(globalScope)
+    }
+}
+
+/**
+ * Jump to a specific state in history
+ * @param {number} index - the state index to jump to
+ * @category engine
+ */
+export function jumpToState(index) {
+    if (!debugMode) return
+    
+    const targetState = stateHistory.jumpToState(index)
+    if (targetState) {
+        stateHistory.restoreState(globalScope, targetState)
+        updateCanvasSet(true)
+        scheduleUpdate(1, 0)
+    }
+}
+
+/**
+ * Get state history for UI display
+ * @return {Object} state history object
+ * @category engine
+ */
+export function getStateHistory() {
+    return {
+        states: stateHistory.getAllStates(),
+        currentIndex: stateHistory.currentIndex,
+        canStepBack: stateHistory.canStepBack(),
+        canStepForward: stateHistory.canStepForward(),
+    }
 }
 
 /**

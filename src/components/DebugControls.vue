@@ -26,6 +26,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 
+// Define emit
+const emit = defineEmits<{
+  'debug-mode-changed': [enabled: boolean]
+}>()
+
 // Import debug functions from engine
 let debugModeSet: (param: boolean) => void
 let debugModeGet: () => boolean
@@ -71,6 +76,9 @@ function toggleDebugMode() {
   isDebugMode.value = !isDebugMode.value
   debugModeSet(isDebugMode.value)
   
+  // Emit the debug mode change event
+  emit('debug-mode-changed', isDebugMode.value)
+  
   if (isDebugMode.value) {
     // Start polling for state updates
     updateInterval = setInterval(refreshStateInfo, 100)
@@ -113,6 +121,8 @@ onMounted(async () => {
     isDebugMode.value = debugModeGet()
     if (isDebugMode.value) {
       updateInterval = setInterval(refreshStateInfo, 100)
+      // Emit initial state
+      emit('debug-mode-changed', true)
     }
   }
 })
