@@ -8,8 +8,14 @@ import { simulationArea } from '../../simulator/src/simulationArea'
 export class SignalVisualizer {
     constructor() {
         this.isEnabled = false
-        this.animationSpeed = 300 // ms for glow animation
-        this.activeSignals = []
+        this.animationSpeed = 150 // ms for glow animation
+
+        // One active animation per wire / node (NO stacking)
+        this.activeSignals = {
+            wires: new Map(), // wireIndex -> { startTime, duration }
+            nodes: new Map()  // nodeIndex -> { startTime, duration }
+        }
+
         this.previousState = null
     }
 
@@ -18,10 +24,26 @@ export class SignalVisualizer {
      * @param {number} speed - Animation speed in milliseconds
      */
     enable(speed = 300) {
+        // Auto-adjust speed based on clock period if available
+        if (typeof simulationArea !== 'undefined' && simulationArea.timePeriod) {
+            speed = Math.max(
+                50,
+                Math.min(500, simulationArea.timePeriod * 0.3)
+            )
+            console.log(
+                '⚡ Auto-adjusted animation speed to',
+                speed,
+                'ms (clock:',
+                simulationArea.timePeriod,
+                'ms)'
+            )
+        }
+
         this.isEnabled = true
         this.animationSpeed = speed
-        this.activeSignals = []
-        console.log('⚡ Signal visualization enabled, speed:', speed, 'ms')
+
+        this.activeSignals.wires.clear()
+        this.activeSignals.nodes.clear()
     }
 
     /**
@@ -29,7 +51,8 @@ export class SignalVisualizer {
      */
     disable() {
         this.isEnabled = false
-        this.activeSignals = []
+        this.activeSignals.wires.clear()
+        this.activeSignals.nodes.clear()
         this.previousState = null
     }
 
@@ -44,35 +67,32 @@ export class SignalVisualizer {
 
         const now = Date.now()
 
-        // Find wires that changed
-        const changedWires = this.findChangedWires(currentState.wires, previousState.wires)
-        
-        // Find nodes that changed
-        const changedNodes = this.findChangedNodes(currentState.nodes, previousState.nodes)
+        // Wires that changed
+        const changedWires = this.findChangedWires(
+            currentState.wires,
+            previousState.wires
+        )
 
-        // Add to active signals
+        // Nodes that changed
+        const changedNodes = this.findChangedNodes(
+            currentState.nodes,
+            previousState.nodes
+        )
+
+        // Start / replace wire animations
         changedWires.forEach((wireIndex) => {
-            this.activeSignals.push({
-                type: 'wire',
-                index: wireIndex,
+            this.activeSignals.wires.set(wireIndex, {
                 startTime: now,
                 duration: this.animationSpeed
             })
         })
 
+        // Start / replace node animations
         changedNodes.forEach((nodeIndex) => {
-            this.activeSignals.push({
-                type: 'node',
-                index: nodeIndex,
+            this.activeSignals.nodes.set(nodeIndex, {
                 startTime: now,
                 duration: this.animationSpeed
             })
-        })
-
-        // Remove expired signals
-        this.activeSignals = this.activeSignals.filter(signal => {
-            const elapsed = now - signal.startTime
-            return elapsed < signal.duration
         })
     }
 
@@ -81,7 +101,7 @@ export class SignalVisualizer {
      */
     findChangedWires(currentWires, previousWires) {
         const changed = []
-        
+
         if (!currentWires || !previousWires) return changed
 
         currentWires.forEach((wire, index) => {
@@ -100,7 +120,7 @@ export class SignalVisualizer {
      */
     findChangedNodes(currentNodes, previousNodes) {
         const changed = []
-        
+
         if (!currentNodes || !previousNodes) return changed
 
         currentNodes.forEach((node, index) => {
@@ -116,27 +136,53 @@ export class SignalVisualizer {
 
     /**
      * Draw signal animations on canvas
-     * @param {CanvasRenderingContext2D} ctx - Canvas context
-     * @param {Scope} scope - Current circuit scope
+     * @param {CanvasRenderingContext2D} ctx
+     * @param {Scope} scope
      */
     drawSignals(ctx, scope) {
-        if (!this.isEnabled || this.activeSignals.length === 0) return
+        if (!this.isEnabled) return
 
         const now = Date.now()
 
-        this.activeSignals.forEach(signal => {
+        // ---- WIRES ----
+        for (const [wireIndex, signal] of this.activeSignals.wires.entries()) {
             const elapsed = now - signal.startTime
-            const progress = elapsed / signal.duration
-            
-            // Calculate fade out intensity (1 -> 0)
-            const intensity = 1 - progress
 
-            if (signal.type === 'wire') {
-                this.drawWireGlow(ctx, scope, signal.index, intensity)
-            } else if (signal.type === 'node') {
-                this.drawNodeGlow(ctx, scope, signal.index, intensity)
+            // Expired
+            if (elapsed >= signal.duration) {
+                this.activeSignals.wires.delete(wireIndex)
+                continue
             }
-        })
+
+            // Safety: never glow if wire is currently 0
+            if (scope.wires?.[wireIndex]?.value === 0) {
+                this.activeSignals.wires.delete(wireIndex)
+                continue
+            }
+
+            const intensity = 1 - elapsed / signal.duration
+            this.drawWireGlow(ctx, scope, wireIndex, intensity)
+        }
+
+        // ---- NODES ----
+        for (const [nodeIndex, signal] of this.activeSignals.nodes.entries()) {
+            const elapsed = now - signal.startTime
+
+            // Expired
+            if (elapsed >= signal.duration) {
+                this.activeSignals.nodes.delete(nodeIndex)
+                continue
+            }
+
+            // Safety: never glow if node is currently 0
+            if (scope.allNodes?.[nodeIndex]?.value === 0) {
+                this.activeSignals.nodes.delete(nodeIndex)
+                continue
+            }
+
+            const intensity = 1 - elapsed / signal.duration
+            this.drawNodeGlow(ctx, scope, nodeIndex, intensity)
+        }
     }
 
     /**
@@ -146,30 +192,30 @@ export class SignalVisualizer {
         if (!scope.wires || !scope.wires[wireIndex]) return
 
         const wire = scope.wires[wireIndex]
-        
+
         ctx.save()
-        
-        // Create glowing effect
+
+        // Outer glow
         ctx.shadowBlur = 15 * intensity
         ctx.shadowColor = `rgba(255, 215, 0, ${intensity})`
         ctx.strokeStyle = `rgba(255, 215, 0, ${intensity * 0.8})`
         ctx.lineWidth = 6
-        
-        // Draw the wire with glow
+
         ctx.beginPath()
         ctx.moveTo(wire.x1, wire.y1)
         ctx.lineTo(wire.x2, wire.y2)
         ctx.stroke()
-        
-        // Draw pulsing effect
-        ctx.lineWidth = 3
+
+        // Inner bright pulse
         ctx.shadowBlur = 25 * intensity
-        ctx.strokeStyle = `rgba(255, 255, 100, ${intensity})`
+        ctx.strokeStyle = `rgba(255, 255, 120, ${intensity})`
+        ctx.lineWidth = 3
+
         ctx.beginPath()
         ctx.moveTo(wire.x1, wire.y1)
         ctx.lineTo(wire.x2, wire.y2)
         ctx.stroke()
-        
+
         ctx.restore()
     }
 
@@ -182,40 +228,48 @@ export class SignalVisualizer {
         const node = scope.allNodes[nodeIndex]
         const x = node.absX ? node.absX() : node.x
         const y = node.absY ? node.absY() : node.y
-        
+
         ctx.save()
-        
+
         // Outer glow
         ctx.shadowBlur = 20 * intensity
         ctx.shadowColor = `rgba(255, 215, 0, ${intensity})`
         ctx.fillStyle = `rgba(255, 215, 0, ${intensity * 0.6})`
-        
+
         ctx.beginPath()
         ctx.arc(x, y, 8 * intensity, 0, Math.PI * 2)
         ctx.fill()
-        
-        // Inner bright spot
+
+        // Inner core
         ctx.shadowBlur = 10 * intensity
-        ctx.fillStyle = `rgba(255, 255, 100, ${intensity})`
+        ctx.fillStyle = `rgba(255, 255, 120, ${intensity})`
+
         ctx.beginPath()
         ctx.arc(x, y, 4 * intensity, 0, Math.PI * 2)
         ctx.fill()
-        
+
         ctx.restore()
     }
 
     /**
-     * Get active signals count (for UI display)
+     * Get active signals count
      */
     getActiveSignalsCount() {
-        return this.activeSignals.length
+        return (
+            this.activeSignals.wires.size +
+            this.activeSignals.nodes.size
+        )
     }
 
     /**
      * Check if currently animating
      */
     isAnimating() {
-        return this.isEnabled && this.activeSignals.length > 0
+        return (
+            this.isEnabled &&
+            (this.activeSignals.wires.size > 0 ||
+                this.activeSignals.nodes.size > 0)
+        )
     }
 }
 
