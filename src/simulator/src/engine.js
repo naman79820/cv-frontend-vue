@@ -16,6 +16,7 @@ import { renderOrder, updateOrder } from './metadata'
 import ContentionPendingData from './contention';
 import { stateHistory } from '../debug/StateHistory'
 import { breakpointManager } from '../debug/BreakpointManager'
+import { signalVisualizer } from '../debug/SignalVisualizer'
 
 /**
  * Core of the simulation and rendering algorithm.
@@ -307,6 +308,31 @@ export function getTriggeredBreakpoint() {
 }
 
 /**
+ * Enable signal visualization
+ * @param {number} speed - Animation speed in ms
+ * @category engine
+ */
+export function enableSignalVisualization(speed = 300) {
+    signalVisualizer.enable(speed)
+}
+
+/**
+ * Disable signal visualization
+ * @category engine
+ */
+export function disableSignalVisualization() {
+    signalVisualizer.disable()
+}
+
+/**
+ * Get signal visualizer instance
+ * @category engine
+ */
+export function getSignalVisualizer() {
+    return signalVisualizer
+}
+
+/**
  *  Flag for updating subCircuits
  * @type {boolean}
  * @category engine
@@ -369,12 +395,19 @@ export function renderCanvas(scope) {
         y: undefined,
         string: undefined,
     } //  Globally set in draw fn ()
+    
     // Render objects
     for (let i = 0; i < renderOrder.length; i++) {
         for (var j = 0; j < scope[renderOrder[i]].length; j++) {
             scope[renderOrder[i]][j].draw()
         }
     }
+    
+    // Draw signal animations AFTER objects (so they appear on top)
+    if (debugMode) {
+        signalVisualizer.drawSignals(ctx, scope)
+    }
+    
     // Show any message
     if (canvasMessageData.string !== undefined) {
         canvasMessage(
@@ -520,7 +553,7 @@ export function play(scope = globalScope, resetNodes = false) {
     // Don't run if paused by breakpoint
     if (pausedByBreakpoint) return
 
-    // Get previous state for breakpoint change detection
+    // Get previous state for change detection (breakpoints & signal visualization)
     const previousState = debugMode ? stateHistory.getCurrentState() : null
 
     simulationArea.simulationQueue.reset()
@@ -572,6 +605,12 @@ export function play(scope = globalScope, resetNodes = false) {
     // Capture state if in debug mode (after simulation is complete)
     if (debugMode && !errorDetected) {
         stateHistory.captureState(scope)
+        const currentState = stateHistory.getCurrentState()
+        
+        // Track signal changes for visualization
+        if (previousState && currentState) {
+            signalVisualizer.trackChanges(currentState, previousState)
+        }
         
         // Check breakpoints after state is captured
         const triggered = breakpointManager.checkBreakpoints(scope, previousState)

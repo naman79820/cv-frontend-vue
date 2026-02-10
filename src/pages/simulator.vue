@@ -7,9 +7,9 @@
         <Helper />
         <DebugTimeline />
         <BreakpointPanel />
-        <!-- Add new components -->
         <WatchPanel ref="watchPanel" />
         <CircuitTooltip ref="tooltip" />
+        <SignalVisualizationControl />
     </div>
 </template>
 
@@ -25,6 +25,7 @@ import DebugTimeline from '#/components/DebugTimeline.vue'
 import BreakpointPanel from '#/components/BreakpointPanel.vue'
 import WatchPanel from '#/components/WatchPanel.vue'
 import CircuitTooltip from '#/components/CircuitTooltip.vue'
+import SignalVisualizationControl from '#/components/SignalVisualizationControl.vue'
 
 defineComponent({
     components: {
@@ -36,6 +37,7 @@ defineComponent({
         BreakpointPanel,
         WatchPanel,
         CircuitTooltip,
+        SignalVisualizationControl,
     },
 })
 
@@ -48,7 +50,6 @@ let cleanupCanvasDebugListeners: any
 
 async function loadDebugListeners() {
   try {
-    // FIXED: Added 'src/' to the path
     const module = await import('../simulator/debug/canvasDebugListeners')
     initCanvasDebugListeners = module.initCanvasDebugListeners
     setCanvasDebugMode = module.setCanvasDebugMode
