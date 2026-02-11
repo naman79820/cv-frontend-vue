@@ -111,8 +111,8 @@ onUnmounted(() => {
 <style scoped>
 .signal-viz-control {
   position: fixed;
-  right: 20px;
-  bottom: 20px;
+  right: 40px;
+  bottom: 100px;
   background: white;
   border: 2px solid #ffc107;
   border-radius: 8px;

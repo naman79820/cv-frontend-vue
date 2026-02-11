@@ -150,9 +150,9 @@ onUnmounted(() => {
 .watch-panel {
   position: fixed;
   right: 20px;
-  top: 200px;
+  top: 420px;
   width: 320px;
-  max-height: 400px;
+  max-height: 350px;
   background: white;
   border: 2px solid #17a2b8;
   border-radius: 8px;
