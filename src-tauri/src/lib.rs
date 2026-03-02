@@ -1,14 +1,13 @@
 use tauri::menu::{MenuBuilder, SubmenuBuilder};
 use tauri::Emitter;
+use tauri::Manager;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_opener::OpenerExt;
-
-// ─── New Tauri Commands for Auth ──────────────────────────────────────────────
 
 #[tauri::command]
 fn open_login_browser(app: tauri::AppHandle) -> Result<(), String> {
     app.opener()
-        .open_url("https://circuitverse.org/users/sign_in?tauri=1", None::<&str>)
+        .open_url("http://localhost:3000/users/sign_in?tauri=1", None::<&str>)
         .map_err(|e| e.to_string())
 }
 
@@ -16,7 +15,7 @@ fn open_login_browser(app: tauri::AppHandle) -> Result<(), String> {
 async fn verify_cv_token(token: String) -> Result<serde_json::Value, String> {
     let client = reqwest::Client::new();
     let response = client
-        .get("https://circuitverse.org/api/v1/me")
+        .get("http://localhost:3000/api/v1/me")
         .header("Authorization", format!("Token {}", token))
         .header("Accept", "application/json")
         .send()
@@ -29,7 +28,7 @@ async fn verify_cv_token(token: String) -> Result<serde_json::Value, String> {
             .await
             .map_err(|e| format!("Parse error: {}", e))
     } else {
-        Err(format!("Auth failed with status: {}", response.status()))
+        Err(format!("Auth failed: {} — make sure Rails is running on localhost:3000", response.status()))
     }
 }
 
@@ -41,8 +40,6 @@ fn extract_token_from_url(url: &str) -> Option<String> {
         .map(|pair| pair["token=".len()..].to_string())
 }
 
-// ─── App Entry ────────────────────────────────────────────────────────────────
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -50,25 +47,40 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_focus();
+            }
+            for arg in argv.iter() {
+                if arg.starts_with("circuitverse://") {
+                    if let Some(token) = extract_token_from_url(arg) {
+                        let _ = app.emit("tauri://cv-auth-token", &token);
+                    }
+                }
+            }
+        }))
         .invoke_handler(tauri::generate_handler![open_login_browser, verify_cv_token])
         .setup(|app| {
-            // ── Deep Link Handler ─────────────────────────────────────────────
-            // Intercepts circuitverse://auth?token=XXX after browser login
+            #[cfg(target_os = "windows")]
+            app.deep_link().register("circuitverse")?;
+
+            // ── Deep Link Handler ─────────────────────────────────────────
             {
                 let handle = app.handle().clone();
                 app.deep_link().on_open_url(move |event| {
-    for url in event.urls() {
-        let url_str = url.to_string();
-        if url_str.starts_with("circuitverse://auth") {
-            if let Some(token) = extract_token_from_url(&url_str) {
-                if let Err(e) = handle.emit("tauri://cv-auth-token", &token) {
-                    eprintln!("Failed to emit auth token: {}", e);
-                }
+                    for url in event.urls() {
+                        let url_str = url.to_string();
+                        if url_str.starts_with("circuitverse://auth") {
+                            if let Some(token) = extract_token_from_url(&url_str) {
+                                if let Err(e) = handle.emit("tauri://cv-auth-token", &token) {
+                                    eprintln!("Failed to emit auth token: {}", e);
+                                }
+                            }
+                        }
+                    }
+                });
             }
-        }
-    }
-});}
-            // ─────────────────────────────────────────────────────────────────
+            // ─────────────────────────────────────────────────────────────
 
             if cfg!(debug_assertions) {
                 app.handle().plugin(
