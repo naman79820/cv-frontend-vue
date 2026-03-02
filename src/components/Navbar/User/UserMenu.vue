@@ -52,7 +52,7 @@
         <template v-if="!authStore.getIsLoggedIn">
           <v-list density="compact" nav>
             <v-list-item
-              @click.stop="showAuthModal(true)"
+              @click.stop="handleSignIn"
               prepend-icon="mdi-login"
               title="Sign In"
               value="sign_in"
@@ -68,6 +68,12 @@
               color="white"
             ></v-list-item>
           </v-list>
+
+          <!-- Tauri: show waiting message while browser auth is in progress -->
+          <div v-if="isTauriEnv && tauriAuthPending" class="tauri-auth-pending">
+            <v-progress-circular indeterminate color="white" size="18" width="2" class="mr-2" />
+            <span>Waiting for browser login...</span>
+          </div>
         </template>
 
         <!-- User Menu Section -->
@@ -106,7 +112,7 @@
           <v-divider class="my-2 bg-white"></v-divider>
 
           <v-list-item
-            @click.stop="signout"
+            @click.stop="handleSignOut"
             prepend-icon="mdi-logout"
             title="Logout"
             value="logout"
@@ -141,8 +147,8 @@
       </v-main>
     </v-layout>
 
-    <!-- Authentication Dialog -->
-    <v-dialog v-model="authModal" max-width="500" persistent>
+    <!-- Authentication Dialog (web only — hidden in Tauri) -->
+    <v-dialog v-if="!isTauriEnv" v-model="authModal" max-width="500" persistent>
       <v-card class="auth-modal" style="background-color: white">
         <v-toolbar color="#43b984">
           <v-toolbar-title class="text-white">
@@ -156,10 +162,10 @@
 
         <v-card-text class="pa-6">
           <v-form @submit.prevent="handleAuthSubmit" ref="authForm">
-            <v-text-field 
-              v-if="!isLoginMode" 
-              v-model="name" 
-              label="Name" 
+            <v-text-field
+              v-if="!isLoginMode"
+              v-model="name"
+              label="Name"
               type="text"
               :rules="[requiredRule]"
               variant="outlined"
@@ -222,7 +228,6 @@
       location="bottom right"
     >
       {{ snackbar.message }}
-
       <template v-slot:actions>
         <v-btn
           variant="text"
@@ -236,12 +241,11 @@
 </template>
 
 <script lang="ts" setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { availableLocale } from '#/locales/i18n'
 import { useAuthStore } from '#/store/authStore'
 import { mdiClose } from '@mdi/js'
-// import { fetch } from '@tauri-apps/plugin-http' // Uncomment if using Tauri's HTTP plugin
 import './User.scss'
 
 const authStore = useAuthStore()
@@ -255,8 +259,13 @@ const { locale } = useI18n()
 const isLoading = ref(false)
 const authForm = ref()
 const unreadCount = ref(0)
+const tauriAuthPending = ref(false)
 
-// Form validation rules
+// ── Tauri detection ───────────────────────────────────────────────────────────
+const isTauriEnv = '__TAURI_INTERNALS__' in window
+const TOKEN_STORAGE_KEY = 'cv_tauri_jwt'
+
+// ── Form validation rules ─────────────────────────────────────────────────────
 const requiredRule = (v: string) => !!v || 'This field is required'
 const emailRule = (v: string) => /.+@.+\..+/.test(v) || 'E-mail must be valid'
 const passwordRule = (v: string) => v.length >= 6 || 'Password must be at least 6 characters'
@@ -268,6 +277,71 @@ const snackbar = ref({
   color: '#43b984'
 })
 
+// ── Sign In — branches on Tauri vs web ───────────────────────────────────────
+async function handleSignIn() {
+  if (isTauriEnv) {
+    await startTauriLogin()
+  } else {
+    showAuthModal(true)
+  }
+}
+
+// ── Tauri Auth Flow ───────────────────────────────────────────────────────────
+async function startTauriLogin() {
+  drawer.value = false
+  tauriAuthPending.value = true
+
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const { listen } = await import('@tauri-apps/api/event')
+
+    // Open system browser → circuitverse.org/users/sign_in?tauri=1
+    await invoke('open_login_browser')
+
+    // One-shot listener — lib.rs emits this after intercepting the deep link
+    const unlisten = await listen<string>('tauri://cv-auth-token', async (event) => {
+      unlisten()
+      tauriAuthPending.value = false
+      await verifyAndStoreToken(event.payload)
+    })
+  } catch (e) {
+    tauriAuthPending.value = false
+    showSnackbar(`Login failed: ${e}`, 'error')
+  }
+}
+
+async function verifyAndStoreToken(token: string) {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const userData = await invoke<{ data: any }>('verify_cv_token', { token })
+
+    // Persist for next app launch
+    localStorage.setItem(TOKEN_STORAGE_KEY, token)
+
+    // Populate auth store — same path as web login
+    authStore.setUserInfo(userData.data)
+    authStore.setToken(token)
+    ;(window as any).isUserLoggedIn = true
+
+    showSnackbar(`Welcome, ${authStore.getUsername}!`, 'success')
+  } catch (e) {
+    localStorage.removeItem(TOKEN_STORAGE_KEY)
+    showSnackbar(`Token verification failed: ${e}`, 'error')
+  }
+}
+
+// ── Restore saved Tauri session on mount ─────────────────────────────────────
+onMounted(async () => {
+  if (!isTauriEnv) return
+  if (authStore.getIsLoggedIn) return // already restored by simulatorHandler
+
+  const stored = localStorage.getItem(TOKEN_STORAGE_KEY)
+  if (stored) {
+    await verifyAndStoreToken(stored)
+  }
+})
+
+// ── Web Auth Flow (unchanged) ─────────────────────────────────────────────────
 function showAuthModal(login: boolean) {
   isLoginMode.value = login
   authModal.value = true
@@ -307,21 +381,15 @@ async function handleAuthSubmit() {
 
     if (!response.ok) {
       let errorData
-      try {
-        errorData = await response.json()
-      } catch (e) {
-        errorData = { message: 'An error occurred' }
-      }
+      try { errorData = await response.json() }
+      catch (e) { errorData = { message: 'An error occurred' } }
       handleLoginError(response.status, errorData)
       return
     }
 
     const data = await response.json()
-    
-    if (!data.token) {
-      throw new Error('No token received from server')
-    }
-    
+    if (!data.token) throw new Error('No token received from server')
+
     authStore.setToken(data.token)
     showSnackbar(
       isLoginMode.value ? 'Login successful!' : 'Registration successful!',
@@ -336,32 +404,20 @@ async function handleAuthSubmit() {
 }
 
 function handleLoginError(status: number, errorData: any) {
-  switch (status) {
-    case 401:
-      showSnackbar('Invalid credentials', 'error')
-      break
-    case 404:
-      showSnackbar('User not found', 'error')
-      break
-    case 409:
-      showSnackbar('User already exists', 'error')
-      break
-    case 422:
-      showSnackbar('Invalid input data', 'error')
-      break
-    default:
-      showSnackbar(errorData.message || 'Authentication failed', 'error')
+  const messages: Record<number, string> = {
+    401: 'Invalid credentials',
+    404: 'User not found',
+    409: 'User already exists',
+    422: 'Invalid input data',
   }
+  showSnackbar(messages[status] || errorData.message || 'Authentication failed', 'error')
 }
 
 function showSnackbar(message: string, type: 'success' | 'error' | 'warning' | 'info') {
-  snackbar.value = {
-    visible: true,
-    message,
-    color: type
-  }
+  snackbar.value = { visible: true, message, color: type }
 }
 
+// ── Navigation helpers ────────────────────────────────────────────────────────
 function dashboard() {
   window.location.href = `/users/${authStore.getUserId}`
 }
@@ -374,8 +430,22 @@ function notifications() {
   window.location.href = `/users/${authStore.getUserId}/notifications`
 }
 
-function signout() {
+function handleSignOut() {
+  if (isTauriEnv) {
+    localStorage.removeItem(TOKEN_STORAGE_KEY)
+  }
   authStore.signOut()
+  ;(window as any).isUserLoggedIn = false
   showSnackbar('You have been logged out', 'info')
 }
 </script>
+
+<style scoped>
+.tauri-auth-pending {
+  display: flex;
+  align-items: center;
+  padding: 8px 16px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.85rem;
+}
+</style>

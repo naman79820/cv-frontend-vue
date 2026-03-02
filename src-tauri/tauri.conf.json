@@ -9,6 +9,13 @@
     "beforeDevCommand": "npx cross-env DESKTOP_MODE=1 npm run dev",
     "beforeBuildCommand": "npx cross-env DESKTOP_MODE=1 npm run build -- v0"
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["circuitverse"]
+      }
+    }
+  },
   "app": {
     "windows": [
       {

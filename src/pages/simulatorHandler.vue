@@ -23,12 +23,15 @@ import { onBeforeMount, ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '#/store/authStore'
 import { useSimulatorMobileStore } from '#/store/simulatorMobileStore'
+import { useTauriAuth } from '#/composables/useTauriAuth'
 
 const route = useRoute()
 const hasAccess = ref(true)
 const isLoading = ref(true)
 const authStore = useAuthStore()
 const simulatorMobileStore = useSimulatorMobileStore()
+const { restoreSession, isTauri } = useTauriAuth()
+
 
 // check if user has edit access to the project
 async function checkEditAccess() {
@@ -58,7 +61,7 @@ async function checkEditAccess() {
             window.location.href = '/users/sign_in'
         }
     })
-}
+}   
 
 // get logged in user informaton when blank simulator is opened
 async function getLoginData() {
@@ -82,8 +85,14 @@ async function getLoginData() {
     }
 }
 
-onBeforeMount(() => {
-    // prioritize logixProjectId from window
+// REPLACE WITH:
+onBeforeMount(async () => {
+    // If running in Tauri desktop app, restore saved session first
+    if (isTauri()) {
+        await restoreSession()
+    }
+
+    // Rest of existing logic — UNCHANGED
     const windowLogixProjectId = (window as any).logixProjectId
     if (windowLogixProjectId && windowLogixProjectId !== '0') {
         ;(window as any).logixProjectId = windowLogixProjectId
@@ -92,7 +101,6 @@ onBeforeMount(() => {
         ;(window as any).logixProjectId = route.params.projectId
         checkEditAccess()
     } else {
-        // if projectId is not defined open blank simulator
         getLoginData()
         isLoading.value = false
     }
