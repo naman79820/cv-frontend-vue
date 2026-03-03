@@ -1,23 +1,44 @@
+/**
+ * main-embed.ts — Minimal embed bundle entry point
+ *
+ * Deliberately excludes:
+ * - Pinia (no auth state needed)
+ * - Vue Router (embed is always single page)
+ * - Full simulator styles (only embed-specific styles)
+ * - FontAwesome (not needed in embed)
+ * - Bootstrap JS (not needed in embed)
+ * - Vuetify (embed uses plain HTML, no Vuetify components)
+ *
+ * Only includes:
+ * - Vue core
+ * - The simulator canvas engine
+ * - Embed-specific UI (zoom, fullscreen, clock)
+ * - Minimal i18n
+ */
 import { createApp } from "vue";
 import EmbedOnlyApp from "./EmbedOnlyApp.vue";
-import vuetify from "./plugins/vuetify";
-import i18n from "./locales/i18n";
-import "bootstrap";
-import "./globalVariables";
-import "./styles/css/main.stylesheet.css";
-import "./styles/color_theme.scss";
-import "./styles/simulator.scss";
-import "@fortawesome/fontawesome-free/css/all.css";
 
-// Force embed mode BEFORE anything else loads
-// This is read by embed.vue, circuit.ts, layoutMode.ts, wire.ts
+// Force embed mode BEFORE simulator engine loads
+// These globals are read by circuit.ts, layoutMode.ts, wire.ts, setup.js
 window.embed = true;
 window.isUserLoggedIn = false;
-window.logixProjectId = new URLSearchParams(window.location.search).get("project_id") || "0";
+window.logixProjectId =
+  new URLSearchParams(window.location.search).get("project_id") ||
+  (window as any).logixProjectId ||
+  "0";
+
+// Minimal styles only — no full simulator.scss, no bootstrap
+import "./styles/css/main.stylesheet.css";
+import "./styles/color_theme.scss";
+
+// Global simulator variables (required by engine)
+import "./globalVariables";
 
 const app = createApp(EmbedOnlyApp);
-app.use(vuetify);
-app.use(i18n);
-// NOTE: No Pinia — embed mode never needs auth state
-// NOTE: No router — embed is always a single page loaded via iframe
+
+// No Pinia — embed never needs auth
+// No router — embed is always loaded directly
+// No Vuetify — embed uses plain HTML controls
+// No i18n — embed UI has no translatable text
+
 app.mount("#app");
